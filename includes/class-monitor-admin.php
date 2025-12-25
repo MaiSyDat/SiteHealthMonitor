@@ -145,8 +145,8 @@ class MSD_Monitor_Admin {
 	 * @since 1.0.0
 	 */
 	public function render_section_description() {
-		echo '<p>' . esc_html__( 'Configure email notifications for website errors. The plugin monitors 404 errors, sitemap health, and database errors.', 'site-health-monitor' ) . '</p>';
-		echo '<p><strong>' . esc_html__( 'Note:', 'site-health-monitor' ) . '</strong> ' . esc_html__( 'To prevent email spam, notifications are rate-limited to once per hour per error type.', 'site-health-monitor' ) . '</p>';
+		echo '<p>' . esc_html__( 'Configure email notifications for website errors. The plugin monitors 404 errors (internal broken links only), sitemap health, and database connection errors.', 'site-health-monitor' ) . '</p>';
+		echo '<p><strong>' . esc_html__( 'Note:', 'site-health-monitor' ) . '</strong> ' . esc_html__( 'Notifications are sent immediately for every valid error detected. Database connection errors are handled by the db.php drop-in file (must be manually placed in wp-content/ directory).', 'site-health-monitor' ) . '</p>';
 	}
 
 	/**
@@ -235,7 +235,7 @@ class MSD_Monitor_Admin {
 							<span class="dashicons dashicons-yes-alt" style="color: #46b450;"></span>
 							<strong><?php esc_html_e( 'Active', 'site-health-monitor' ); ?></strong>
 							<p class="description">
-								<?php esc_html_e( 'Monitoring all 404 errors (excluding static assets).', 'site-health-monitor' ); ?>
+								<?php esc_html_e( 'Monitoring internal broken links only (404 errors with referrer from the same domain). Static assets and external 404s are ignored.', 'site-health-monitor' ); ?>
 							</p>
 						</td>
 					</tr>
@@ -276,13 +276,28 @@ class MSD_Monitor_Admin {
 						</td>
 					</tr>
 					<tr>
-						<th scope="row"><?php esc_html_e( 'Database Error Listener', 'site-health-monitor' ); ?></th>
+						<th scope="row"><?php esc_html_e( 'Database Connection Monitor', 'site-health-monitor' ); ?></th>
 						<td>
-							<span class="dashicons dashicons-yes-alt" style="color: #46b450;"></span>
-							<strong><?php esc_html_e( 'Active', 'site-health-monitor' ); ?></strong>
-							<p class="description">
-								<?php esc_html_e( 'Listening for database query errors.', 'site-health-monitor' ); ?>
-							</p>
+							<?php
+							$db_file_exists = file_exists( WP_CONTENT_DIR . '/db.php' );
+							if ( $db_file_exists ) {
+								?>
+								<span class="dashicons dashicons-yes-alt" style="color: #46b450;"></span>
+								<strong><?php esc_html_e( 'Active', 'site-health-monitor' ); ?></strong>
+								<p class="description">
+									<?php esc_html_e( 'db.php drop-in file is installed and monitoring database connection failures.', 'site-health-monitor' ); ?>
+								</p>
+								<?php
+							} else {
+								?>
+								<span class="dashicons dashicons-warning" style="color: #f0b849;"></span>
+								<strong><?php esc_html_e( 'Not Installed', 'site-health-monitor' ); ?></strong>
+								<p class="description">
+									<?php esc_html_e( 'db.php drop-in file not found in wp-content/ directory. Database connection errors will not be monitored. Please manually place the db.php file in wp-content/ directory.', 'site-health-monitor' ); ?>
+								</p>
+								<?php
+							}
+							?>
 						</td>
 					</tr>
 				</tbody>

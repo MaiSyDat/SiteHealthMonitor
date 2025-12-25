@@ -29,14 +29,6 @@ class MSD_Monitor_Core {
 	private static $instance = null;
 
 	/**
-	 * Cooldown period in seconds (60 minutes).
-	 *
-	 * @since 1.0.0
-	 * @var int
-	 */
-	private $cooldown_period = 3600;
-
-	/**
 	 * Static assets extensions to ignore for 404 detection.
 	 *
 	 * @since 1.0.0
@@ -72,16 +64,14 @@ class MSD_Monitor_Core {
 	 * @since 1.0.0
 	 */
 	private function init_hooks() {
-		// 404 Error Detector.
+		// 404 Error Detector (Smart: Internal broken links only).
 		add_action( 'template_redirect', array( $this, 'detect_404_errors' ) );
 
 		// Sitemap Health Check Cron.
 		add_action( 'msd_monitor_check_sitemap', array( $this, 'check_sitemap_health' ) );
 
-		// Database Error Listener (available in WordPress 5.2+).
-		// Note: This hook may not be available in older WordPress versions.
-		// WordPress will simply not fire the action if it doesn't exist.
-		add_action( 'wp_db_query_error', array( $this, 'handle_database_error' ), 10, 2 );
+		// Note: Database connection errors are handled by db.php drop-in file.
+		// This file must be manually placed in wp-content/ directory.
 	}
 
 	/**
@@ -110,9 +100,10 @@ class MSD_Monitor_Core {
 	}
 
 	/**
-	 * Detect 404 errors.
+	 * Detect 404 errors (Smart: Internal broken links only).
 	 *
 	 * Hooked into template_redirect to catch 404 pages.
+	 * Only reports 404s when the referrer is from the same domain (internal broken links).
 	 * Filters out static assets to only report actual page URLs.
 	 *
 	 * @since 1.0.0
@@ -130,26 +121,26 @@ class MSD_Monitor_Core {
 			return;
 		}
 
-		// Check rate limiting.
-		$transient_key = 'msd_monitor_404_' . md5( $requested_url );
-		if ( get_transient( $transient_key ) ) {
-			return; // Still in cooldown period.
+		// Get referrer.
+		$referrer = isset( $_SERVER['HTTP_REFERER'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_REFERER'] ) ) : '';
+
+		// CRITICAL: Only send email if referrer is from the same domain (internal broken link).
+		if ( empty( $referrer ) || ! $this->is_internal_referrer( $referrer ) ) {
+			// Not an internal broken link - ignore (user typing URL or bot scanning).
+			return;
 		}
 
 		// Gather error details.
 		$error_details = array(
-			'type'        => '404 Error',
+			'type'        => '404 Error (Internal Broken Link)',
 			'url'         => $requested_url,
-			'referrer'    => isset( $_SERVER['HTTP_REFERER'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_REFERER'] ) ) : 'Direct access',
+			'referrer'    => $referrer,
 			'user_agent' => isset( $_SERVER['HTTP_USER_AGENT'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_USER_AGENT'] ) ) : 'Unknown',
 			'ip_address' => $this->get_client_ip(),
 		);
 
-		// Send notification email.
+		// Send notification email immediately (no rate limiting).
 		$this->send_notification( $error_details );
-
-		// Set cooldown transient.
-		set_transient( $transient_key, true, $this->cooldown_period );
 	}
 
 	/**
@@ -164,12 +155,6 @@ class MSD_Monitor_Core {
 
 		if ( empty( $sitemap_url ) ) {
 			return; // No sitemap URL configured.
-		}
-
-		// Check rate limiting.
-		$transient_key = 'msd_monitor_sitemap_error';
-		if ( get_transient( $transient_key ) ) {
-			return; // Still in cooldown period.
 		}
 
 		// Sanitize sitemap URL.
@@ -197,47 +182,16 @@ class MSD_Monitor_Core {
 				'error_message' => $error_message,
 			);
 
-			// Send notification email.
+			// Send notification email immediately (no rate limiting).
 			$this->send_notification( $error_details );
-
-			// Set cooldown transient.
-			set_transient( $transient_key, true, $this->cooldown_period );
 		}
-	}
-
-	/**
-	 * Handle database errors.
-	 *
-	 * Listens to wp_db_query_error action to catch SQL query errors.
-	 *
-	 * @since 1.0.0
-	 * @param string $query The SQL query that caused the error.
-	 * @param string $error The error message.
-	 */
-	public function handle_database_error( $query, $error ) {
-		// Check rate limiting.
-		$transient_key = 'msd_monitor_db_error';
-		if ( get_transient( $transient_key ) ) {
-			return; // Still in cooldown period.
-		}
-
-		$error_details = array(
-			'type'         => 'Database Error',
-			'query'        => sanitize_text_field( $query ),
-			'error_message' => sanitize_text_field( $error ),
-		);
-
-		// Send notification email.
-		$this->send_notification( $error_details );
-
-		// Set cooldown transient.
-		set_transient( $transient_key, true, $this->cooldown_period );
 	}
 
 	/**
 	 * Send notification email.
 	 *
 	 * Sends email notification to administrator using wp_mail().
+	 * Logs the result to debug.log.
 	 *
 	 * @since 1.0.0
 	 * @param array $error_details Error details array.
@@ -246,12 +200,13 @@ class MSD_Monitor_Core {
 		$email_address = get_option( 'msd_monitor_email_address', get_option( 'admin_email' ) );
 
 		if ( empty( $email_address ) || ! is_email( $email_address ) ) {
+			$this->log_to_debug( 'Email notification skipped: Invalid email address.' );
 			return; // Invalid email address.
 		}
 
 		// Build email subject.
 		$subject = sprintf(
-			/* translators: %s: Error type */
+			/* translators: %s: Site name */
 			__( '[%s] Site Health Alert', 'site-health-monitor' ),
 			get_bloginfo( 'name' )
 		);
@@ -266,7 +221,18 @@ class MSD_Monitor_Core {
 		);
 
 		// Send email.
-		wp_mail( $email_address, $subject, $body, $headers );
+		$mail_sent = wp_mail( $email_address, $subject, $body, $headers );
+
+		// Log the result to debug.log.
+		$log_message = sprintf(
+			'[Site Health Monitor] %s notification email %s sent to %s. Error Type: %s',
+			$error_details['type'],
+			$mail_sent ? 'successfully' : 'FAILED',
+			$email_address,
+			isset( $error_details['url'] ) ? $error_details['url'] : 'N/A'
+		);
+
+		$this->log_to_debug( $log_message );
 	}
 
 	/**
@@ -395,6 +361,48 @@ class MSD_Monitor_Core {
 		}
 
 		return 'Unknown';
+	}
+
+	/**
+	 * Check if referrer is from the same domain (internal link).
+	 *
+	 * @since 1.0.0
+	 * @param string $referrer Referrer URL.
+	 * @return bool True if referrer is from the same domain, false otherwise.
+	 */
+	private function is_internal_referrer( $referrer ) {
+		if ( empty( $referrer ) ) {
+			return false;
+		}
+
+		// Get site URL and parse domain.
+		$site_url = get_site_url();
+		$site_host = wp_parse_url( $site_url, PHP_URL_HOST );
+
+		// Parse referrer host.
+		$referrer_host = wp_parse_url( $referrer, PHP_URL_HOST );
+
+		// Compare hosts (case-insensitive).
+		if ( empty( $site_host ) || empty( $referrer_host ) ) {
+			return false;
+		}
+
+		// Check if referrer host matches site host.
+		return strtolower( $referrer_host ) === strtolower( $site_host );
+	}
+
+	/**
+	 * Log message to debug.log.
+	 *
+	 * @since 1.0.0
+	 * @param string $message Message to log.
+	 */
+	private function log_to_debug( $message ) {
+		if ( defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
+			$log_file = defined( 'WP_CONTENT_DIR' ) ? WP_CONTENT_DIR . '/debug.log' : ABSPATH . 'wp-content/debug.log';
+			$timestamp = date( 'Y-m-d H:i:s' );
+			@error_log( sprintf( '[%s] %s', $timestamp, $message ), 3, $log_file );
+		}
 	}
 }
 
