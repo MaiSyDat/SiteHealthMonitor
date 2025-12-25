@@ -37,6 +37,15 @@ class MSD_Monitor_Core {
 	private $static_extensions = array( 'css', 'js', 'jpg', 'jpeg', 'png', 'gif', 'svg', 'map', 'ico', 'woff', 'woff2', 'ttf', 'eot' );
 
 	/**
+	 * Track if 404 notification has been sent for current request.
+	 * Prevents duplicate emails when multiple hooks fire.
+	 *
+	 * @since 1.0.0
+	 * @var bool
+	 */
+	private $notification_sent = false;
+
+	/**
 	 * Get singleton instance.
 	 *
 	 * @since 1.0.0
@@ -65,8 +74,12 @@ class MSD_Monitor_Core {
 	 */
 	private function init_hooks() {
 		// 404 Error Detector (Smart: Internal broken links only).
-		// Priority 1 ensures this runs before redirection plugins.
-		add_action( 'template_redirect', array( $this, 'detect_404_errors' ), 1 );
+		// Hook into 'wp' action with high priority to catch 404s before template_redirect.
+		// This ensures we detect 404s before Rank Math SEO and other redirection plugins can redirect.
+		add_action( 'wp', array( $this, 'detect_404_errors' ), 1 );
+		
+		// Also hook into template_redirect as backup (with priority 0 to run even earlier).
+		add_action( 'template_redirect', array( $this, 'detect_404_errors' ), 0 );
 
 		// Sitemap Health Check Cron.
 		add_action( 'msd_monitor_check_sitemap', array( $this, 'check_sitemap_health' ) );
@@ -103,18 +116,32 @@ class MSD_Monitor_Core {
 	/**
 	 * Detect 404 errors (Smart: Internal broken links only).
 	 *
-	 * Hooked into template_redirect to catch 404 pages.
+	 * Hooked into 'wp' and 'template_redirect' actions to catch 404 pages before redirection plugins
+	 * (like Rank Math SEO) can redirect them.
 	 * Only reports 404s when the referrer is from the same domain (internal broken links).
 	 * Filters out static assets to only report actual page URLs.
 	 *
 	 * @since 1.0.0
 	 */
 	public function detect_404_errors() {
-		if ( ! is_404() ) {
+		// Prevent duplicate notifications if method is called multiple times.
+		if ( $this->notification_sent ) {
 			return;
 		}
 
-		// Get the requested URL.
+		// Check if this is a 404 error first (before any redirection happens).
+		global $wp_query;
+		
+		// Check both is_404() function and wp_query->is_404() property for reliability.
+		$is_404_status = is_404();
+		$wp_query_is_404 = ( isset( $wp_query ) && isset( $wp_query->is_404 ) && $wp_query->is_404 );
+		
+		// Exit if this is not a 404 error.
+		if ( ! $is_404_status && ! $wp_query_is_404 ) {
+			return;
+		}
+
+		// Get the requested URL before any redirection occurs.
 		$requested_url = $this->get_requested_url();
 
 		// Filter out static assets.
@@ -126,6 +153,8 @@ class MSD_Monitor_Core {
 		$referrer = isset( $_SERVER['HTTP_REFERER'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_REFERER'] ) ) : '';
 
 		// CRITICAL: Only send email if referrer is from the same domain (internal broken link).
+		// This filters out direct access (no referrer) and bot scans.
+		// Rank Math SEO will still redirect the user after we detect and notify.
 		if ( empty( $referrer ) || ! $this->is_internal_referrer( $referrer ) ) {
 			// Not an internal broken link - ignore (user typing URL or bot scanning).
 			return;
@@ -142,6 +171,9 @@ class MSD_Monitor_Core {
 
 		// Send notification email immediately (no rate limiting).
 		$this->send_notification( $error_details );
+		
+		// Mark notification as sent to prevent duplicates.
+		$this->notification_sent = true;
 	}
 
 	/**
@@ -192,7 +224,6 @@ class MSD_Monitor_Core {
 	 * Send notification email.
 	 *
 	 * Sends email notification to administrator using wp_mail().
-	 * Logs the result to debug.log.
 	 *
 	 * @since 1.0.0
 	 * @param array $error_details Error details array.
@@ -201,7 +232,6 @@ class MSD_Monitor_Core {
 		$email_address = get_option( 'msd_monitor_email_address', get_option( 'admin_email' ) );
 
 		if ( empty( $email_address ) || ! is_email( $email_address ) ) {
-			$this->log_to_debug( 'Email notification skipped: Invalid email address.' );
 			return; // Invalid email address.
 		}
 
@@ -222,18 +252,7 @@ class MSD_Monitor_Core {
 		);
 
 		// Send email.
-		$mail_sent = wp_mail( $email_address, $subject, $body, $headers );
-
-		// Log the result to debug.log.
-		$log_message = sprintf(
-			'[Site Health Monitor] %s notification email %s sent to %s. Error Type: %s',
-			$error_details['type'],
-			$mail_sent ? 'successfully' : 'FAILED',
-			$email_address,
-			isset( $error_details['url'] ) ? $error_details['url'] : 'N/A'
-		);
-
-		$this->log_to_debug( $log_message );
+		wp_mail( $email_address, $subject, $body, $headers );
 	}
 
 	/**
@@ -392,18 +411,5 @@ class MSD_Monitor_Core {
 		return strtolower( $referrer_host ) === strtolower( $site_host );
 	}
 
-	/**
-	 * Log message to debug.log.
-	 *
-	 * @since 1.0.0
-	 * @param string $message Message to log.
-	 */
-	private function log_to_debug( $message ) {
-		if ( defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
-			$log_file = defined( 'WP_CONTENT_DIR' ) ? WP_CONTENT_DIR . '/debug.log' : ABSPATH . 'wp-content/debug.log';
-			$timestamp = date( 'Y-m-d H:i:s' );
-			@error_log( sprintf( '[%s] %s', $timestamp, $message ), 3, $log_file );
-		}
-	}
 }
 
