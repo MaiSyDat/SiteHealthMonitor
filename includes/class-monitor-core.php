@@ -65,7 +65,8 @@ class MSD_Monitor_Core {
 	 */
 	private function init_hooks() {
 		// 404 Error Detector (Smart: Internal broken links only).
-		add_action( 'template_redirect', array( $this, 'detect_404_errors' ) );
+		// Priority 1 ensures this runs before redirection plugins.
+		add_action( 'template_redirect', array( $this, 'detect_404_errors' ), 1 );
 
 		// Sitemap Health Check Cron.
 		add_action( 'msd_monitor_check_sitemap', array( $this, 'check_sitemap_health' ) );

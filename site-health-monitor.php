@@ -4,8 +4,8 @@
  * Plugin URI: https://wordpress.org/plugins/site-health-monitor
  * Description: Monitor website errors (DB, Sitemap, 404) and send email notifications to administrators.
  * Version: 1.0.0
- * Author: Your Name
- * Author URI: https://example.com
+ * Author: Mai Sy Dat
+ * Author URI: https://hupuna.com
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain: site-health-monitor
