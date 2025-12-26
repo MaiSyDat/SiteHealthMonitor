@@ -90,7 +90,6 @@ class MSD_Monitor_Admin {
 	 * @since 1.0.0
 	 */
 	public function register_settings() {
-		// Register setting for email address.
 		register_setting(
 			'msd_monitor_settings',
 			'msd_monitor_email_address',
@@ -101,7 +100,6 @@ class MSD_Monitor_Admin {
 			)
 		);
 
-		// Register setting for sitemap URL.
 		register_setting(
 			'msd_monitor_settings',
 			'msd_monitor_sitemap_url',
@@ -112,7 +110,6 @@ class MSD_Monitor_Admin {
 			)
 		);
 
-		// Add settings section.
 		add_settings_section(
 			'msd_monitor_main_section',
 			__( 'Notification Settings', 'site-health-monitor' ),
@@ -120,7 +117,6 @@ class MSD_Monitor_Admin {
 			'site-health-monitor'
 		);
 
-		// Add email address field.
 		add_settings_field(
 			'msd_monitor_email_address',
 			__( 'Notification Email Address', 'site-health-monitor' ),
@@ -129,7 +125,6 @@ class MSD_Monitor_Admin {
 			'msd_monitor_main_section'
 		);
 
-		// Add sitemap URL field.
 		add_settings_field(
 			'msd_monitor_sitemap_url',
 			__( 'Sitemap URL to Check', 'site-health-monitor' ),
@@ -145,8 +140,8 @@ class MSD_Monitor_Admin {
 	 * @since 1.0.0
 	 */
 	public function render_section_description() {
-		echo '<p>' . esc_html__( 'Configure email notifications for website errors. The plugin monitors 404 errors (internal broken links only), sitemap health, and database connection errors.', 'site-health-monitor' ) . '</p>';
-		echo '<p><strong>' . esc_html__( 'Note:', 'site-health-monitor' ) . '</strong> ' . esc_html__( 'Notifications are sent immediately for every valid error detected. Database connection errors are handled by the db.php drop-in file (must be manually placed in wp-content/ directory).', 'site-health-monitor' ) . '</p>';
+		echo '<p>' . esc_html__( 'Configure email notifications for website errors. The plugin monitors 404 errors (internal broken links only) and sitemap health.', 'site-health-monitor' ) . '</p>';
+		echo '<p><strong>' . esc_html__( 'Note:', 'site-health-monitor' ) . '</strong> ' . esc_html__( 'Notifications are sent immediately for every valid error detected.', 'site-health-monitor' ) . '</p>';
 	}
 
 	/**
@@ -195,12 +190,10 @@ class MSD_Monitor_Admin {
 	 * @since 1.0.0
 	 */
 	public function render_settings_page() {
-		// Check user capabilities.
 		if ( ! current_user_can( 'manage_options' ) ) {
 			wp_die( esc_html__( 'You do not have sufficient permissions to access this page.', 'site-health-monitor' ) );
 		}
 
-		// Show success message if settings were saved.
 		if ( isset( $_GET['settings-updated'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
 			add_settings_error(
 				'msd_monitor_messages',
@@ -210,7 +203,6 @@ class MSD_Monitor_Admin {
 			);
 		}
 
-		// Display settings errors.
 		settings_errors( 'msd_monitor_messages' );
 		?>
 		<div class="wrap">
@@ -269,31 +261,6 @@ class MSD_Monitor_Admin {
 								<strong><?php esc_html_e( 'Inactive', 'site-health-monitor' ); ?></strong>
 								<p class="description">
 									<?php esc_html_e( 'Please configure a sitemap URL above to enable monitoring.', 'site-health-monitor' ); ?>
-								</p>
-								<?php
-							}
-							?>
-						</td>
-					</tr>
-					<tr>
-						<th scope="row"><?php esc_html_e( 'Database Connection Monitor', 'site-health-monitor' ); ?></th>
-						<td>
-							<?php
-							$db_file_exists = file_exists( WP_CONTENT_DIR . '/db.php' );
-							if ( $db_file_exists ) {
-								?>
-								<span class="dashicons dashicons-yes-alt" style="color: #46b450;"></span>
-								<strong><?php esc_html_e( 'Active', 'site-health-monitor' ); ?></strong>
-								<p class="description">
-									<?php esc_html_e( 'db.php drop-in file is installed and monitoring database connection failures.', 'site-health-monitor' ); ?>
-								</p>
-								<?php
-							} else {
-								?>
-								<span class="dashicons dashicons-warning" style="color: #f0b849;"></span>
-								<strong><?php esc_html_e( 'Not Installed', 'site-health-monitor' ); ?></strong>
-								<p class="description">
-									<?php esc_html_e( 'db.php drop-in file not found in wp-content/ directory. Database connection errors will not be monitored. Please manually place the db.php file in wp-content/ directory.', 'site-health-monitor' ); ?>
 								</p>
 								<?php
 							}

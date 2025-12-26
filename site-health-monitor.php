@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Site Health Monitor
  * Plugin URI: https://wordpress.org/plugins/site-health-monitor
- * Description: Monitor website errors (DB, Sitemap, 404) and send email notifications to administrators.
+ * Description: Monitor website errors (404, Sitemap) and send email notifications to administrators.
  * Version: 1.0.0
  * Author: Mai Sy Dat
  * Author URI: https://hupuna.com
