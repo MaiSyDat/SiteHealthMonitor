@@ -76,6 +76,7 @@ class MSD_Monitor_Core {
 		add_action( 'wp', array( $this, 'detect_404_errors' ), 1 );
 		add_action( 'template_redirect', array( $this, 'detect_404_errors' ), 0 );
 		add_action( 'msd_monitor_check_sitemap', array( $this, 'check_sitemap_health' ) );
+		add_action( 'msd_monitor_cleanup_old_records', array( $this, 'cleanup_old_records' ) );
 	}
 
 	/**
@@ -86,6 +87,11 @@ class MSD_Monitor_Core {
 	public function activate() {
 		if ( ! wp_next_scheduled( 'msd_monitor_check_sitemap' ) ) {
 			wp_schedule_event( time(), 'twicedaily', 'msd_monitor_check_sitemap' );
+		}
+		
+		// Schedule cleanup of old notification records.
+		if ( ! wp_next_scheduled( 'msd_monitor_cleanup_old_records' ) ) {
+			wp_schedule_event( time(), 'daily', 'msd_monitor_cleanup_old_records' );
 		}
 	}
 
@@ -98,6 +104,11 @@ class MSD_Monitor_Core {
 		$timestamp = wp_next_scheduled( 'msd_monitor_check_sitemap' );
 		if ( $timestamp ) {
 			wp_unschedule_event( $timestamp, 'msd_monitor_check_sitemap' );
+		}
+		
+		$cleanup_timestamp = wp_next_scheduled( 'msd_monitor_cleanup_old_records' );
+		if ( $cleanup_timestamp ) {
+			wp_unschedule_event( $cleanup_timestamp, 'msd_monitor_cleanup_old_records' );
 		}
 	}
 
@@ -183,11 +194,24 @@ class MSD_Monitor_Core {
 
 	/**
 	 * Send notification email.
+	 * OPTIMIZED: Prevents spam by only sending email once per URL per 24 hours.
 	 *
 	 * @since 1.0.0
 	 * @param array $error_details Error details array.
 	 */
 	private function send_notification( $error_details ) {
+		// Get error URL (unique identifier for the error).
+		$error_url = isset( $error_details['url'] ) ? $error_details['url'] : '';
+		
+		if ( empty( $error_url ) ) {
+			return;
+		}
+
+		// Check if we should send email (anti-spam: 24h cooldown per URL).
+		if ( ! $this->should_send_notification( $error_url ) ) {
+			return;
+		}
+
 		$email_address = get_option( 'msd_monitor_email_address', get_option( 'admin_email' ) );
 
 		if ( empty( $email_address ) || ! is_email( $email_address ) ) {
@@ -205,7 +229,132 @@ class MSD_Monitor_Core {
 			'From: ' . get_bloginfo( 'name' ) . ' <' . get_option( 'admin_email' ) . '>',
 		);
 
-		wp_mail( $email_address, $subject, $this->build_email_body( $error_details ), $headers );
+		// Send email.
+		$sent = wp_mail( $email_address, $subject, $this->build_email_body( $error_details ), $headers );
+
+		// If email sent successfully, record the notification timestamp.
+		if ( $sent ) {
+			$this->record_notification_sent( $error_url );
+		}
+	}
+
+	/**
+	 * Check if notification should be sent for this URL.
+	 * Prevents spam: only send once per URL per 24 hours.
+	 *
+	 * @since 1.0.0
+	 * @param string $error_url The error URL to check.
+	 * @return bool True if should send, false otherwise.
+	 */
+	private function should_send_notification( $error_url ) {
+		// Normalize URL (remove trailing slash, convert to lowercase for consistency).
+		$normalized_url = $this->normalize_url( $error_url );
+		
+		// Create unique key for this URL.
+		$option_key = 'msd_monitor_sent_' . md5( $normalized_url );
+		
+		// Get last sent timestamp.
+		$last_sent = get_option( $option_key, 0 );
+		
+		// If never sent, allow sending.
+		if ( empty( $last_sent ) || 0 === intval( $last_sent ) ) {
+			return true;
+		}
+		
+		// Check if 24 hours have passed since last notification.
+		$hours_since_last = ( time() - intval( $last_sent ) ) / HOUR_IN_SECONDS;
+		
+		// Only send if 24+ hours have passed.
+		return $hours_since_last >= 24;
+	}
+
+	/**
+	 * Record that a notification was sent for this URL.
+	 * Stores timestamp in wp_options for tracking.
+	 *
+	 * @since 1.0.0
+	 * @param string $error_url The error URL.
+	 * @return void
+	 */
+	private function record_notification_sent( $error_url ) {
+		// Normalize URL.
+		$normalized_url = $this->normalize_url( $error_url );
+		
+		// Create unique key.
+		$option_key = 'msd_monitor_sent_' . md5( $normalized_url );
+		
+		// Store current timestamp.
+		update_option( $option_key, time(), false );
+		
+		// Schedule cleanup of old records (runs once daily).
+		if ( ! wp_next_scheduled( 'msd_monitor_cleanup_old_records' ) ) {
+			wp_schedule_event( time(), 'daily', 'msd_monitor_cleanup_old_records' );
+		}
+	}
+
+	/**
+	 * Normalize URL for consistent comparison.
+	 * Removes trailing slashes, converts to lowercase, removes query strings for 404 errors.
+	 *
+	 * @since 1.0.0
+	 * @param string $url URL to normalize.
+	 * @return string Normalized URL.
+	 */
+	private function normalize_url( $url ) {
+		if ( empty( $url ) ) {
+			return '';
+		}
+
+		// Parse URL.
+		$parsed = wp_parse_url( $url );
+		
+		if ( ! $parsed ) {
+			return $url;
+		}
+
+		// Rebuild URL with normalized components.
+		$scheme = isset( $parsed['scheme'] ) ? strtolower( $parsed['scheme'] ) : 'http';
+		$host   = isset( $parsed['host'] ) ? strtolower( $parsed['host'] ) : '';
+		$path   = isset( $parsed['path'] ) ? rtrim( $parsed['path'], '/' ) : '';
+		
+		// For 404 errors, ignore query strings and fragments (they don't affect the broken link).
+		// This prevents duplicate notifications for same URL with different query params.
+		$normalized = $scheme . '://' . $host . $path;
+		
+		return $normalized;
+	}
+
+	/**
+	 * Cleanup old notification records (older than 7 days).
+	 * Prevents wp_options table from growing too large.
+	 * Hooked into daily cron.
+	 *
+	 * @since 1.0.0
+	 * @return void
+	 */
+	public function cleanup_old_records() {
+		global $wpdb;
+		
+		// Delete all options older than 7 days (we only need 24h tracking, but keep 7 days for safety).
+		$cutoff_time = time() - ( 7 * DAY_IN_SECONDS );
+		
+		// Get all notification option keys.
+		$option_keys = $wpdb->get_col(
+			$wpdb->prepare(
+				"SELECT option_name FROM {$wpdb->options} 
+				WHERE option_name LIKE %s 
+				AND CAST(option_value AS UNSIGNED) < %d",
+				'msd_monitor_sent_%',
+				$cutoff_time
+			)
+		);
+		
+		// Delete old records.
+		if ( ! empty( $option_keys ) ) {
+			foreach ( $option_keys as $key ) {
+				delete_option( $key );
+			}
+		}
 	}
 
 	/**
