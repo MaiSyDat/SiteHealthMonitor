@@ -37,6 +37,29 @@ class MSD_Monitor_Core {
 	private $static_extensions = array( 'css', 'js', 'jpg', 'jpeg', 'png', 'gif', 'svg', 'map', 'ico', 'woff', 'woff2', 'ttf', 'eot' );
 
 	/**
+	 * Bot/scanner User Agents to ignore.
+	 *
+	 * @since 1.0.0
+	 * @var array
+	 */
+	private $bot_user_agents = array( 'go-http-client', 'curl', 'wget', 'python-requests', 'python-urllib', 'scanner', 'bot', 'crawler', 'spider', 'monitor', 'check', 'test' );
+
+	/**
+	 * Suspicious file patterns to ignore (common vulnerability scanner targets).
+	 *
+	 * @since 1.0.0
+	 * @var array
+	 */
+	private $suspicious_patterns = array(
+		'/\.php$/', // Any .php file in root
+		'/wp-admin\/.*\.php$/', // PHP files in wp-admin
+		'/wp-includes\/.*\.php$/', // PHP files in wp-includes
+		'/wp-content\/.*\.php$/', // PHP files in wp-content (except themes/plugins)
+		'/wp-content\/themes\/.*\/style\.php$/', // style.php in themes
+		'/wp-content\/uploads\/.*\.php$/', // PHP files in uploads
+	);
+
+	/**
 	 * Track if 404 notification has been sent for current request.
 	 * Prevents duplicate emails when multiple hooks fire.
 	 *
@@ -135,6 +158,18 @@ class MSD_Monitor_Core {
 		$requested_url = $this->get_requested_url();
 
 		if ( $this->is_static_asset( $requested_url ) ) {
+			return;
+		}
+
+		// Filter out suspicious/scanner URLs (common vulnerability scanner targets).
+		if ( $this->is_suspicious_url( $requested_url ) ) {
+			return;
+		}
+
+		$user_agent = isset( $_SERVER['HTTP_USER_AGENT'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_USER_AGENT'] ) ) : '';
+
+		// Filter out bot/scanner requests.
+		if ( $this->is_bot_request( $user_agent ) ) {
 			return;
 		}
 
@@ -500,6 +535,67 @@ class MSD_Monitor_Core {
 		}
 
 		return strtolower( $referrer_host ) === strtolower( $site_host );
+	}
+
+	/**
+	 * Check if request is from a bot/scanner.
+	 *
+	 * @since 1.0.0
+	 * @param string $user_agent User agent string.
+	 * @return bool True if bot/scanner, false otherwise.
+	 */
+	private function is_bot_request( $user_agent ) {
+		if ( empty( $user_agent ) ) {
+			return false;
+		}
+
+		$user_agent_lower = strtolower( $user_agent );
+
+		foreach ( $this->bot_user_agents as $bot_pattern ) {
+			if ( false !== strpos( $user_agent_lower, $bot_pattern ) ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Check if URL matches suspicious patterns (common vulnerability scanner targets).
+	 *
+	 * @since 1.0.0
+	 * @param string $url URL to check.
+	 * @return bool True if suspicious, false otherwise.
+	 */
+	private function is_suspicious_url( $url ) {
+		if ( empty( $url ) ) {
+			return false;
+		}
+
+		$path = wp_parse_url( $url, PHP_URL_PATH );
+
+		if ( empty( $path ) ) {
+			return false;
+		}
+
+		// Check against suspicious patterns.
+		foreach ( $this->suspicious_patterns as $pattern ) {
+			if ( preg_match( $pattern, $path ) ) {
+				return true;
+			}
+		}
+
+		// Additional check: if referrer is the same as requested URL, it's likely a scanner.
+		$referrer = isset( $_SERVER['HTTP_REFERER'] ) ? sanitize_text_field( wp_unslash( $_SERVER['HTTP_REFERER'] ) ) : '';
+		if ( ! empty( $referrer ) ) {
+			$referrer_path = wp_parse_url( $referrer, PHP_URL_PATH );
+			if ( $referrer_path === $path ) {
+				// Same path in referrer and request = likely scanner.
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 }
