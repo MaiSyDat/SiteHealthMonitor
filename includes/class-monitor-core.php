@@ -29,28 +29,28 @@ class MSD_Monitor_Core {
 	private static $instance = null;
 
 	/**
-	 * Static assets extensions to ignore for 404 detection.
+	 * Default static assets extensions to ignore for 404 detection.
 	 *
 	 * @since 1.0.0
 	 * @var array
 	 */
-	private $static_extensions = array( 'css', 'js', 'jpg', 'jpeg', 'png', 'gif', 'svg', 'map', 'ico', 'woff', 'woff2', 'ttf', 'eot' );
+	private $default_static_extensions = array( 'css', 'js', 'jpg', 'jpeg', 'png', 'gif', 'svg', 'map', 'ico', 'woff', 'woff2', 'ttf', 'eot' );
 
 	/**
-	 * Bot/scanner User Agents to ignore.
+	 * Default bot/scanner User Agents to ignore.
 	 *
 	 * @since 1.0.0
 	 * @var array
 	 */
-	private $bot_user_agents = array( 'go-http-client', 'curl', 'wget', 'python-requests', 'python-urllib', 'scanner', 'bot', 'crawler', 'spider', 'monitor', 'check', 'test' );
+	private $default_bot_user_agents = array( 'go-http-client', 'curl', 'wget', 'python-requests', 'python-urllib', 'scanner', 'bot', 'crawler', 'spider', 'monitor', 'check', 'test' );
 
 	/**
-	 * Suspicious file patterns to ignore (common vulnerability scanner targets).
+	 * Default suspicious file patterns to ignore (common vulnerability scanner targets).
 	 *
 	 * @since 1.0.0
 	 * @var array
 	 */
-	private $suspicious_patterns = array(
+	private $default_suspicious_patterns = array(
 		'/\.php$/', // Any .php file in root
 		'/wp-admin\/.*\.php$/', // PHP files in wp-admin
 		'/wp-includes\/.*\.php$/', // PHP files in wp-includes
@@ -259,13 +259,43 @@ class MSD_Monitor_Core {
 			get_bloginfo( 'name' )
 		);
 
+		/**
+		 * Filter the email subject before sending.
+		 *
+		 * @since 1.1.0
+		 * @param string $subject Email subject.
+		 * @param array  $error_details Error details array.
+		 */
+		$subject = apply_filters( 'msd_monitor_email_subject', $subject, $error_details );
+
 		$headers = array(
 			'Content-Type: text/html; charset=UTF-8',
 			'From: ' . get_bloginfo( 'name' ) . ' <' . get_option( 'admin_email' ) . '>',
 		);
 
+		/**
+		 * Filter the email headers before sending.
+		 *
+		 * @since 1.1.0
+		 * @param array $headers Email headers array.
+		 * @param array $error_details Error details array.
+		 */
+		$headers = apply_filters( 'msd_monitor_email_headers', $headers, $error_details );
+
+		// Build email body.
+		$email_body = $this->build_email_body( $error_details );
+
+		/**
+		 * Filter the email body before sending.
+		 *
+		 * @since 1.1.0
+		 * @param string $email_body Email body HTML.
+		 * @param array  $error_details Error details array.
+		 */
+		$email_body = apply_filters( 'msd_monitor_email_body', $email_body, $error_details );
+
 		// Send email.
-		$sent = wp_mail( $email_address, $subject, $this->build_email_body( $error_details ), $headers );
+		$sent = wp_mail( $email_address, $subject, $email_body, $headers );
 
 		// If email sent successfully, record the notification timestamp.
 		if ( $sent ) {
@@ -488,7 +518,7 @@ class MSD_Monitor_Core {
 
 		$extension = strtolower( pathinfo( $path, PATHINFO_EXTENSION ) );
 
-		return in_array( $extension, $this->static_extensions, true );
+		return in_array( $extension, $this->get_static_extensions(), true );
 	}
 
 	/**
@@ -551,13 +581,61 @@ class MSD_Monitor_Core {
 
 		$user_agent_lower = strtolower( $user_agent );
 
-		foreach ( $this->bot_user_agents as $bot_pattern ) {
+		foreach ( $this->get_bot_user_agents() as $bot_pattern ) {
 			if ( false !== strpos( $user_agent_lower, $bot_pattern ) ) {
 				return true;
 			}
 		}
 
 		return false;
+	}
+
+	/**
+	 * Get static extensions list (filterable).
+	 *
+	 * @since 1.1.0
+	 * @return array Array of static file extensions.
+	 */
+	private function get_static_extensions() {
+		/**
+		 * Filter the list of static file extensions to ignore for 404 detection.
+		 *
+		 * @since 1.1.0
+		 * @param array $extensions Array of file extensions (without dot).
+		 */
+		return apply_filters( 'msd_monitor_static_extensions', $this->default_static_extensions );
+	}
+
+	/**
+	 * Get bot user agents list (filterable).
+	 *
+	 * @since 1.1.0
+	 * @return array Array of bot user agent patterns.
+	 */
+	private function get_bot_user_agents() {
+		/**
+		 * Filter the list of bot/scanner user agents to ignore.
+		 *
+		 * @since 1.1.0
+		 * @param array $user_agents Array of user agent patterns (case-insensitive matching).
+		 */
+		return apply_filters( 'msd_monitor_bot_user_agents', $this->default_bot_user_agents );
+	}
+
+	/**
+	 * Get suspicious URL patterns list (filterable).
+	 *
+	 * @since 1.1.0
+	 * @return array Array of regex patterns for suspicious URLs.
+	 */
+	private function get_suspicious_patterns() {
+		/**
+		 * Filter the list of suspicious URL patterns to ignore (common vulnerability scanner targets).
+		 *
+		 * @since 1.1.0
+		 * @param array $patterns Array of regex patterns (e.g., '/\.php$/').
+		 */
+		return apply_filters( 'msd_monitor_suspicious_patterns', $this->default_suspicious_patterns );
 	}
 
 	/**
@@ -579,7 +657,7 @@ class MSD_Monitor_Core {
 		}
 
 		// Check against suspicious patterns.
-		foreach ( $this->suspicious_patterns as $pattern ) {
+		foreach ( $this->get_suspicious_patterns() as $pattern ) {
 			if ( preg_match( $pattern, $path ) ) {
 				return true;
 			}

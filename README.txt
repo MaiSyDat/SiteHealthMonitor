@@ -3,7 +3,7 @@ Contributors: maisydat
 Tags: monitoring, 404, sitemap, health check, email notifications, error detection
 Requires at least: 5.0
 Tested up to: 6.4
-Stable tag: 1.0.0
+Stable tag: 1.1.0
 Requires PHP: 7.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -65,6 +65,18 @@ Currently, 404 monitoring is always active. You can disable sitemap monitoring b
 
 == Changelog ==
 
+= 1.1.0 =
+* Added WordPress filters for extensibility:
+  * `msd_monitor_static_extensions` - Filter static file extensions to ignore
+  * `msd_monitor_bot_user_agents` - Filter bot/scanner user agents to ignore
+  * `msd_monitor_suspicious_patterns` - Filter suspicious URL patterns to ignore
+  * `msd_monitor_email_subject` - Filter email subject before sending
+  * `msd_monitor_email_body` - Filter email body HTML before sending
+  * `msd_monitor_email_headers` - Filter email headers before sending
+* Improved code structure for better extensibility
+* Added bot/scanner filtering to reduce spam notifications
+* Added suspicious URL pattern filtering
+
 = 1.0.0 =
 * Initial release
 * 404 error detection (internal broken links only)
@@ -72,6 +84,9 @@ Currently, 404 monitoring is always active. You can disable sitemap monitoring b
 * Email notifications
 
 == Upgrade Notice ==
+
+= 1.1.0 =
+This version adds WordPress filters for better extensibility. Developers can now customize filtering rules and email templates using WordPress hooks. No action required for basic usage.
 
 = 1.0.0 =
 Initial release of Site Health Monitor.

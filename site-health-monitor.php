@@ -3,7 +3,7 @@
  * Plugin Name: Site Health Monitor
  * Plugin URI: https://wordpress.org/plugins/site-health-monitor
  * Description: Monitor website errors (404, Sitemap) and send email notifications to administrators.
- * Version: 1.0.0
+ * Version: 1.1.0
  * Author: Mai Sy Dat
  * Author URI: https://hupuna.com
  * License: GPL v2 or later
@@ -27,7 +27,7 @@ if ( ! defined( 'WPINC' ) ) {
  *
  * @since 1.0.0
  */
-define( 'MSD_MONITOR_VERSION', '1.0.0' );
+define( 'MSD_MONITOR_VERSION', '1.1.0' );
 
 /**
  * Plugin directory path.
