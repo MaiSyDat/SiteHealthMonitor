@@ -195,6 +195,7 @@ class MSD_Monitor_Core {
 	 * Check sitemap health.
 	 *
 	 * Cron job that runs twice daily to check if sitemap is accessible.
+	 * Includes fallback for loopback connection issues (cURL error 7).
 	 *
 	 * @since 1.0.0
 	 */
@@ -215,7 +216,23 @@ class MSD_Monitor_Core {
 			)
 		);
 
+		// Check if remote request failed.
 		if ( is_wp_error( $response ) || wp_remote_retrieve_response_code( $response ) !== 200 ) {
+			// Fallback for loopback connection issues (cURL error 7: Connection refused).
+			if ( is_wp_error( $response ) && 'http_request_failed' === $response->get_error_code() ) {
+				$error_message = $response->get_error_message();
+				
+				// Check if it's a loopback/connection refused error.
+				if ( false !== strpos( $error_message, 'cURL error 7' ) || false !== strpos( $error_message, 'Connection refused' ) ) {
+					// Try to verify sitemap existence using local file path.
+					if ( $this->verify_sitemap_local( $sitemap_url ) ) {
+						// Sitemap exists locally, skip notification (false positive due to firewall).
+						return;
+					}
+				}
+			}
+
+			// Send notification for actual errors.
 			$error_details = array(
 				'type'          => 'Sitemap Error',
 				'url'           => $sitemap_url,
@@ -225,6 +242,47 @@ class MSD_Monitor_Core {
 
 			$this->send_notification( $error_details );
 		}
+	}
+
+	/**
+	 * Verify sitemap exists locally using file path.
+	 * Fallback method when wp_remote_get fails due to loopback restrictions.
+	 *
+	 * @since 1.0.0
+	 * @param string $sitemap_url Sitemap URL.
+	 * @return bool True if sitemap exists locally, false otherwise.
+	 */
+	private function verify_sitemap_local( $sitemap_url ) {
+		// Parse URL to get path.
+		$parsed = wp_parse_url( $sitemap_url );
+		
+		if ( empty( $parsed['path'] ) ) {
+			return false;
+		}
+
+		// Convert URL path to local file path.
+		$site_url_parsed = wp_parse_url( get_site_url() );
+		$site_path = isset( $site_url_parsed['path'] ) ? $site_url_parsed['path'] : '';
+		
+		// Remove site path from sitemap path to get relative path.
+		$relative_path = $parsed['path'];
+		if ( ! empty( $site_path ) && 0 === strpos( $relative_path, $site_path ) ) {
+			$relative_path = substr( $relative_path, strlen( $site_path ) );
+		}
+		
+		// Build local file path.
+		$local_file = ABSPATH . ltrim( $relative_path, '/' );
+		
+		// Check if file exists and is readable.
+		if ( file_exists( $local_file ) && is_readable( $local_file ) ) {
+			// Additional check: verify it's a valid XML file.
+			$content = file_get_contents( $local_file, false, null, 0, 100 );
+			if ( false !== strpos( $content, '<?xml' ) ) {
+				return true;
+			}
+		}
+		
+		return false;
 	}
 
 	/**
@@ -430,49 +488,65 @@ class MSD_Monitor_Core {
 	 * @return string HTML email body.
 	 */
 	private function build_email_body( $error_details ) {
-		$body = '<html><body>';
-		$body .= '<h2>' . esc_html__( 'Site Health Alert', 'site-health-monitor' ) . '</h2>';
+		$body = '<html><body style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">';
+		$body .= '<h2 style="color: #d63638;">' . esc_html__( 'Site Health Alert', 'site-health-monitor' ) . '</h2>';
 		$body .= '<p>' . esc_html__( 'An error has been detected on your website:', 'site-health-monitor' ) . '</p>';
-		$body .= '<table style="border-collapse: collapse; width: 100%; max-width: 600px;">';
+		$body .= '<table style="border-collapse: collapse; width: 100%; max-width: 600px; margin-bottom: 20px;">';
 
-		$body .= '<tr><td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">' . esc_html__( 'Error Type', 'site-health-monitor' ) . '</td>';
-		$body .= '<td style="padding: 8px; border: 1px solid #ddd;">' . esc_html( $error_details['type'] ) . '</td></tr>';
+		// Error Type.
+		$body .= '<tr><td style="padding: 10px; border: 1px solid #ddd; font-weight: bold; background-color: #f7f7f7; width: 35%;">' . esc_html__( 'Error Type', 'site-health-monitor' ) . '</td>';
+		$body .= '<td style="padding: 10px; border: 1px solid #ddd;">' . esc_html( $error_details['type'] ) . '</td></tr>';
 
+		// Target URL (Broken link) for 404 errors, or URL for sitemap errors.
 		if ( isset( $error_details['url'] ) ) {
-			$body .= '<tr><td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">' . esc_html__( 'URL', 'site-health-monitor' ) . '</td>';
-			$body .= '<td style="padding: 8px; border: 1px solid #ddd;">' . esc_html( $error_details['url'] ) . '</td></tr>';
+			$url_label = ( false !== strpos( $error_details['type'], '404' ) ) 
+				? esc_html__( 'Target URL (Broken link)', 'site-health-monitor' )
+				: esc_html__( 'URL', 'site-health-monitor' );
+			
+			$body .= '<tr><td style="padding: 10px; border: 1px solid #ddd; font-weight: bold; background-color: #f7f7f7;">' . $url_label . '</td>';
+			$body .= '<td style="padding: 10px; border: 1px solid #ddd; word-break: break-all;">' . esc_html( $error_details['url'] ) . '</td></tr>';
 		}
 
-		if ( isset( $error_details['referrer'] ) ) {
-			$body .= '<tr><td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">' . esc_html__( 'Referrer', 'site-health-monitor' ) . '</td>';
-			$body .= '<td style="padding: 8px; border: 1px solid #ddd;">' . esc_html( $error_details['referrer'] ) . '</td></tr>';
+		// Source Page (Where to find it) - for 404 errors with referrer.
+		if ( isset( $error_details['referrer'] ) && ! empty( $error_details['referrer'] ) ) {
+			$body .= '<tr><td style="padding: 10px; border: 1px solid #ddd; font-weight: bold; background-color: #f7f7f7;">' . esc_html__( 'Source Page (Where to find it)', 'site-health-monitor' ) . '</td>';
+			$body .= '<td style="padding: 10px; border: 1px solid #ddd; word-break: break-all;">' . esc_html( $error_details['referrer'] ) . '</td></tr>';
 		}
 
-		if ( isset( $error_details['user_agent'] ) ) {
-			$body .= '<tr><td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">' . esc_html__( 'User Agent', 'site-health-monitor' ) . '</td>';
-			$body .= '<td style="padding: 8px; border: 1px solid #ddd;">' . esc_html( $error_details['user_agent'] ) . '</td></tr>';
-		}
-
-		if ( isset( $error_details['ip_address'] ) ) {
-			$body .= '<tr><td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">' . esc_html__( 'IP Address', 'site-health-monitor' ) . '</td>';
-			$body .= '<td style="padding: 8px; border: 1px solid #ddd;">' . esc_html( $error_details['ip_address'] ) . '</td></tr>';
-		}
-
+		// Additional details (for debugging).
 		if ( isset( $error_details['error_code'] ) ) {
-			$body .= '<tr><td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">' . esc_html__( 'Error Code', 'site-health-monitor' ) . '</td>';
-			$body .= '<td style="padding: 8px; border: 1px solid #ddd;">' . esc_html( $error_details['error_code'] ) . '</td></tr>';
+			$body .= '<tr><td style="padding: 10px; border: 1px solid #ddd; font-weight: bold; background-color: #f7f7f7;">' . esc_html__( 'Error Code', 'site-health-monitor' ) . '</td>';
+			$body .= '<td style="padding: 10px; border: 1px solid #ddd;">' . esc_html( $error_details['error_code'] ) . '</td></tr>';
 		}
 
 		if ( isset( $error_details['error_message'] ) ) {
-			$body .= '<tr><td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">' . esc_html__( 'Error Message', 'site-health-monitor' ) . '</td>';
-			$body .= '<td style="padding: 8px; border: 1px solid #ddd;">' . esc_html( $error_details['error_message'] ) . '</td></tr>';
+			$body .= '<tr><td style="padding: 10px; border: 1px solid #ddd; font-weight: bold; background-color: #f7f7f7;">' . esc_html__( 'Error Message', 'site-health-monitor' ) . '</td>';
+			$body .= '<td style="padding: 10px; border: 1px solid #ddd;">' . esc_html( $error_details['error_message'] ) . '</td></tr>';
 		}
 
-		$body .= '<tr><td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">' . esc_html__( 'Time', 'site-health-monitor' ) . '</td>';
-		$body .= '<td style="padding: 8px; border: 1px solid #ddd;">' . esc_html( current_time( 'mysql' ) ) . '</td></tr>';
+		// Timestamp.
+		$body .= '<tr><td style="padding: 10px; border: 1px solid #ddd; font-weight: bold; background-color: #f7f7f7;">' . esc_html__( 'Time', 'site-health-monitor' ) . '</td>';
+		$body .= '<td style="padding: 10px; border: 1px solid #ddd;">' . esc_html( current_time( 'mysql' ) ) . '</td></tr>';
 
 		$body .= '</table>';
-		$body .= '<p><small>' . esc_html__( 'This is an automated message from Site Health Monitor plugin.', 'site-health-monitor' ) . '</small></p>';
+
+		// Action button - link to source page for 404 errors.
+		if ( isset( $error_details['referrer'] ) && ! empty( $error_details['referrer'] ) ) {
+			$body .= '<div style="margin: 20px 0;">';
+			$body .= '<a href="' . esc_url( $error_details['referrer'] ) . '" style="display: inline-block; padding: 12px 24px; background-color: #2271b1; color: #ffffff; text-decoration: none; border-radius: 3px; font-weight: bold;">';
+			$body .= esc_html__( 'Đi đến trang chứa link lỗi', 'site-health-monitor' );
+			$body .= '</a>';
+			$body .= '</div>';
+		} elseif ( isset( $error_details['url'] ) && false !== strpos( $error_details['type'], 'Sitemap' ) ) {
+			// For sitemap errors, link to the sitemap URL.
+			$body .= '<div style="margin: 20px 0;">';
+			$body .= '<a href="' . esc_url( $error_details['url'] ) . '" style="display: inline-block; padding: 12px 24px; background-color: #2271b1; color: #ffffff; text-decoration: none; border-radius: 3px; font-weight: bold;">';
+			$body .= esc_html__( 'View Sitemap', 'site-health-monitor' );
+			$body .= '</a>';
+			$body .= '</div>';
+		}
+
+		$body .= '<p style="margin-top: 30px;"><small style="color: #666;">' . esc_html__( 'This is an automated message from Site Health Monitor plugin.', 'site-health-monitor' ) . '</small></p>';
 		$body .= '</body></html>';
 
 		return $body;
